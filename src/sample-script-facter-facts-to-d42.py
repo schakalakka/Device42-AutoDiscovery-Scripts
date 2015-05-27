@@ -1,21 +1,22 @@
-"""
-NOTE:
-This script is obsolete.  
-Please use "nix_bsd_mac_inventory (https://github.com/device42/nix_bsd_mac_inventory)" script instead.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-"""
+#"""
+#NOTE:
+#This script is obsolete.  
+#Please use "nix_bsd_mac_inventory (https://github.com/device42/nix_bsd_mac_inventory)" script instead.
+#
+#THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+#EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+#MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+#NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+#LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+#OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+#WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#"""
 
 ################################################################
 # The script goes through the yaml fact files created by facter
 # and populates device42 database with following info:
-#device name, manufacturer, hardware model, serial #, os info, memory, cpucount and cpucores info
+# device name, manufacturer, hardware model, serial #, os info, memory, cpucount and cpucores info
 # IP address, interface name and mac address.
 # Script tested with python 2.4
 ################################################################
@@ -30,18 +31,28 @@ import base64
 import sys
 import glob
 import math
+
 #Device42 URL and credentials
-BASE_URL='https://your-device42-url'  #Please make sure there is no / in the end
+
+cred = open('/home/andreas.radke/device42.credentials', 'r')
+
+BASE_URL = cred.readline().split('\n')[0] #Please make sure there is no / in the end
+USER = cred.readline().split('\n')[0]
+PASSWORD = cred.readline().split('\n')[0]
+# puppet config dir
+puppetdir = cred.readline().split('\n')[0] #Change to reflect node directory with yaml fact files.
+
+cred.close()
 
 API_DEVICE_URL=BASE_URL+'/api/device/'   
 API_IP_URL =BASE_URL+'/api/ip/'          
 
-USER ='your-user-name'
-PASSWORD='your-password-here'
-DRY_RUN = False
+DRY_RUN =  False #if True no upload to device42
 
-# puppet config dir
-puppetdir="/var/opt/lib/pe-puppet/yaml/node/"  #Change to reflect node directory with yaml fact files.
+print BASE_URL
+print USER
+print PASSWORD
+print puppetdir
 
 
 def post(url, params):
@@ -58,7 +69,7 @@ def post(url, params):
         else:
             req = urllib2.Request(url, data, headers)
             print '---REQUEST---',req.get_full_url()
-            print req.headers
+	    print req.headers
             print req.data
 
             response = urllib2.urlopen(req)
@@ -96,7 +107,7 @@ for infile in glob.glob( os.path.join(puppetdir, '*yaml') ):
             except: pass
 
     f.close()       
-    device_name = to_ascii(d['clientcert'])  #using clientcert as the nodename here, you can change it to your liking.
+    device_name = to_ascii(d.get('clientcert',None))  #using clientcert as the nodename here, you can change it to your liking.
     os = to_ascii(d.get('operatingsystem', None))
     osver = to_ascii(d.get('operatingsystemrelease', None))
     device = {
@@ -119,28 +130,55 @@ for infile in glob.glob( os.path.join(puppetdir, '*yaml') ):
                     'manufacturer' :  manufacturer,
                     'hardware' : hw,
                     })
-            if sn is not None: device.update({
-                    'serial_no' : sn,
-                }) 
-    mem_b = d.get('memorysize',None).split(' ')[1]
-    if mem_b is not None:
-        if mem_b == 'MB':
-            memory = closest_memory_assumption(int(float(d['memorysize'].split(' ')[0])))
-        else: memory = closest_memory_assumption(int(float(d['memorysize'].split(' ')[0])*1024))
+            if sn!="None": 
+                device.update({'serial_no' : sn,}) 
+    
+    #RAM        
+    if d.get('memorysize_mb',None) != None:
+   	 memory = closest_memory_assumption(int(float(d['memorysize_mb'])))
+    	 device.update({'memory': memory,})
+    elif d.get('memorysize',None) != None:
+	if d.get('memorysize',None).split(' ')[1] == 'MB':
+     	    memory = closest_memory_assumption(int(float(d['memorysize'].split(' ')[0])))
+        else: 
+	    memory = closest_memory_assumption(int(float(d['memorysize'].split(' ')[0])*1024))
         device.update({'memory': memory,})
-    cpucount = int(d.get('physicalprocessorcount', None))
+
+
+
+    #mem_c = d.get('memorysize_mb',None)
+    #if mem_c is None:
+    #    mem_b = d.get('memorysize',None).split(' ')[1]
+    #    if mem_b is not None:
+    #        if mem_b == 'MB':
+    #            memory = closest_memory_assumption(int(float(d['memorysize'].split(' ')[0])))
+    #        else: memory = closest_memory_assumption(int(float(d['memorysize'].split(' ')[0])*1024))
+    #        device.update({'memory': memory,})
+    #else:
+    #    memory = closest_memory_assumption(int(float(d['memorysize_mb'])))
+    #    device.update({'memory': memory,})
+
+    #cpucount=Total CPUs, cpucore=Cores/CPU
+    cpucount = d.get('physicalprocessorcount', None)
     if cpucount is not None:
+	cpucount = int(cpucount)
         if cpucount == 0: cpucount = 1
         cpucore = int(d.get('processorcount', None))
         device.update({    
         'cpucount': cpucount,
         'cpucore': cpucore,        
         })
-    
+    cpuspeed = d.get('processor0', None)
+    if cpuspeed is not None:
+        #split to get the part after @ and before GHz
+        cpuspeed = int(1000*float(cpuspeed.split('@')[1].split('GHz')[0]))
+        device.update({'cpupower': cpuspeed,})
+
+    #Interface 
     post(API_DEVICE_URL, device)
-    interfaces =  d.get('interfaces',None).split(',')
-    if interfaces is not None:
-        for interface in interfaces:
+    if d.get('interfaces',None) != None:
+        interfaces =  d.get('interfaces',None).split(',')
+	for interface in interfaces:
             if not 'loopback' in interface.lower():
                 ipkey = 'ipaddress'+'_'+interface.replace(' ','').lower()
                 mackey  = 'macaddress'+'_'+interface.replace(' ','').lower()
@@ -154,4 +192,6 @@ for infile in glob.glob( os.path.join(puppetdir, '*yaml') ):
                     }
                 if macaddress is not None: ip.update({'macaddress' : macaddress,})
                 if ip.get('ipaddress') is not None and ip.get('ipaddress') != '127.0.0.1': post(API_IP_URL, ip)
+    else:
+        print "KEINE INTERFACES VORHANDEN!!!111"
 
